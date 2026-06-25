@@ -246,6 +246,7 @@ body{font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;background:var
 
 /* 고정 컬럼 (좌측) */
 .gantt-fixed{flex-shrink:0;border-right:2px solid var(--border);background:#fff;z-index:10;position:sticky;left:0}
+.gantt-fixed-body{overflow:hidden;}
 .gantt-fixed-hdr{background:var(--gray2);border-bottom:1px solid var(--border);font-size:12px;font-weight:700;color:var(--text2);display:flex}
 .gantt-fixed-row{display:flex;align-items:center;border-bottom:1px solid var(--border2);min-height:48px}
 .gantt-fixed-row:last-child{border-bottom:none}
@@ -454,11 +455,11 @@ body{font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;background:var
     </div>
 
     <!-- 바디 -->
-    <div style="display:flex;max-height:460px;overflow-y:auto" id="ganttBodyWrap">
+    <div style="display:flex;max-height:480px;overflow:hidden;position:relative" id="ganttBodyWrap">
       <!-- 고정 컬럼 바디 -->
       <div style="flex-shrink:0;width:487px;border-right:2px solid var(--border);overflow:hidden" id="ganttFixedBody"></div>
       <!-- 타임라인 스크롤 바디 -->
-      <div style="flex:1;overflow-x:auto;overflow-y:hidden" id="ganttScrollBody">
+      <div style="flex:1;overflow-x:auto;overflow-y:auto" id="ganttScrollBody">
         <div id="ganttBody" style="position:relative;min-height:10px"></div>
       </div>
     </div>
@@ -1160,18 +1161,17 @@ function renderGantt(data){
   const gfb=document.getElementById('ganttFixedBody'); if(gfb) gfb.innerHTML=fixedRows;
   const gb=document.getElementById('ganttBody'); if(gb){gb.innerHTML=timelineRows;gb.style.minWidth=totalPx+'px';}
 
-  // 헤더와 바디 가로 스크롤 동기화
+  // 스크롤 동기화: ganttScrollBody가 마스터
   const scrollBody=document.getElementById('ganttScrollBody');
   const axisWrap=document.getElementById('ganttAxisWrap');
-  if(scrollBody&&axisWrap){
-    scrollBody.onscroll=()=>{ axisWrap.scrollLeft=scrollBody.scrollLeft; };
-  }
-
-  // 고정 컬럼과 스크롤 바디 세로 스크롤 동기화
-  const bodyWrap=document.getElementById('ganttBodyWrap');
   const fixedBody=document.getElementById('ganttFixedBody');
-  if(bodyWrap&&fixedBody){
-    bodyWrap.onscroll=()=>{ fixedBody.scrollTop=bodyWrap.scrollTop; };
+  if(scrollBody){
+    scrollBody.onscroll=()=>{
+      // 가로: 헤더 축 동기화
+      if(axisWrap) axisWrap.scrollLeft=scrollBody.scrollLeft;
+      // 세로: 고정 컬럼 동기화
+      if(fixedBody) fixedBody.scrollTop=scrollBody.scrollTop;
+    };
   }
 
   // TODAY 누적금액 라벨 — 첫 번째 행의 타임라인 위에 배치

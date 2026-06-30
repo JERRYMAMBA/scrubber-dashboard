@@ -548,8 +548,18 @@ body{font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;background:var
   </div>
   <div class="g2">
     <div class="card">
-      <div class="card-title">프로젝트 상태 분포 <span>전체 프로젝트 기준 — 완료건은 납기 준수/지연으로 세분화</span></div>
+      <div class="card-title" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+        <span>프로젝트 상태 분포</span>
+        <span style="font-size:11px;color:var(--text3);font-weight:400">전체 프로젝트 기준</span>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          <button id="otBtnFinal" onclick="setOnTimeBasis('final')"
+            style="height:26px;padding:0 10px;border-radius:14px;border:1px solid var(--blue3);background:var(--blue3);color:#fff;font-size:10px;font-weight:700;cursor:pointer;font-family:inherit">최종 납기 기준</button>
+          <button id="otBtnOrig" onclick="setOnTimeBasis('orig')"
+            style="height:26px;padding:0 10px;border-radius:14px;border:1px solid var(--border);background:#fff;color:var(--text2);font-size:10px;font-weight:700;cursor:pointer;font-family:inherit">최초 계획 기준</button>
+        </div>
+      </div>
       <div class="cw" style="height:180px"><canvas id="cOnTime"></canvas></div>
+      <div id="otBasisNote" style="font-size:10px;color:var(--text3);margin-top:6px;text-align:center"></div>
     </div>
     <div class="card">
       <div class="card-title">제작사별 공정률 평균</div>
@@ -1429,10 +1439,45 @@ function renderECS(){
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
       scales:{x:{grid:{color:GC}},y:{grid:{color:GC},ticks:{stepSize:1}}}}});
 
-  // 프로젝트 상태 분포 차트 (납기준수 / 납기지연 / 제작중 / 제작전)
+  renderOnTimeChart();
+
+  // maker chart
+  const makerMap={};
+  ECSDB.forEach(r=>{
+    if(!makerMap[r.maker]) makerMap[r.maker]={sum:0,cnt:0};
+    makerMap[r.maker].sum+=r.prog; makerMap[r.maker].cnt++;
+  });
+  const makers=Object.entries(makerMap).map(([k,v])=>({k,avg:Math.round(v.sum/v.cnt*100)}));
+  if(charts.maker)charts.maker.destroy();
+  charts.maker=new Chart(document.getElementById('cMaker'),{type:'bar',
+    data:{labels:makers.map(m=>m.k),datasets:[{label:'평균 공정률(%)',data:makers.map(m=>m.avg),
+      backgroundColor:'rgba(56,122,221,.6)',borderRadius:4,borderSkipped:false}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+      scales:{x:{grid:{color:GC}},y:{grid:{color:GC},max:100,ticks:{callback:v=>v+'%'}}}}});
+}
+
+
+/* ══ 납기 준수율 도넛차트 (최종납기/최초계획 기준 토글) ══ */
+let onTimeBasis = 'final'; // 'final' | 'orig'
+
+function setOnTimeBasis(basis){
+  onTimeBasis = basis;
+  document.getElementById('otBtnFinal').style.background = basis==='final'?'var(--blue3)':'#fff';
+  document.getElementById('otBtnFinal').style.color = basis==='final'?'#fff':'var(--text2)';
+  document.getElementById('otBtnFinal').style.borderColor = basis==='final'?'var(--blue3)':'var(--border)';
+  document.getElementById('otBtnOrig').style.background = basis==='orig'?'var(--blue3)':'#fff';
+  document.getElementById('otBtnOrig').style.color = basis==='orig'?'#fff':'var(--text2)';
+  document.getElementById('otBtnOrig').style.borderColor = basis==='orig'?'var(--blue3)':'var(--border)';
+  renderOnTimeChart();
+}
+
+function renderOnTimeChart(){
   const doneItems=DB.filter(r=>getStatus(r)==='done');
+
   const onT=doneItems.filter(r=>{
-    const delDate=p2d(r.delivery); if(!delDate) return true;
+    // 기준에 따라 비교할 납기일 결정
+    const compareDelivery = onTimeBasis==='orig' ? (r._origDelivery||r.delivery) : r.delivery;
+    const delDate=p2d(compareDelivery); if(!delDate) return true;
     if(r.fat_start){
       const fs=r.fat_start.startsWith('2026')?r.fat_start:'2026-'+r.fat_start;
       const fd=p2d(fs); return fd&&fd<=delDate;
@@ -1448,7 +1493,16 @@ function renderECS(){
   const beforeCnt=DB.filter(r=>getStatus(r)==='before').length;
   const totalAll=onT+offT+activeCnt+beforeCnt;
 
-  if(charts.ontime)charts.ontime.destroy();
+  // 변경된 호선 수 카운트 (안내 문구용)
+  const changedCnt = DB.filter(r=>getDeliveryHistory(r.hull).length>0).length;
+  const noteEl=document.getElementById('otBasisNote');
+  if(noteEl){
+    noteEl.textContent = onTimeBasis==='orig'
+      ? `최초 계획 납기일 기준 (납기 변경 이력 있는 호선 ${changedCnt}건 반영)`
+      : `현재(최종) 납기일 기준`;
+  }
+
+  if(charts.ontime) charts.ontime.destroy();
   charts.ontime=new Chart(document.getElementById('cOnTime'),{type:'doughnut',
     data:{labels:['납기 준수','납기 지연','제작중','제작전'],datasets:[{
       data:[onT,offT,activeCnt,beforeCnt],
@@ -1462,13 +1516,7 @@ function renderECS(){
             return data.labels.map((label,i)=>{
               const val=data.datasets[0].data[i];
               const pct=totalAll>0?Math.round(val/totalAll*100):0;
-              return {
-                text:`${label} ${val}건 (${pct}%)`,
-                fillStyle:data.datasets[0].backgroundColor[i],
-                strokeStyle:'#fff',
-                lineWidth:1,
-                index:i
-              };
+              return { text:`${label} ${val}건 (${pct}%)`, fillStyle:data.datasets[0].backgroundColor[i], strokeStyle:'#fff', lineWidth:1, index:i };
             });
           }
         }},
@@ -1477,20 +1525,6 @@ function renderECS(){
           return `${ctx.label}: ${ctx.raw}건 (${pct}%)`;
         }}}
       }}});
-
-  // maker chart
-  const makerMap={};
-  ECSDB.forEach(r=>{
-    if(!makerMap[r.maker]) makerMap[r.maker]={sum:0,cnt:0};
-    makerMap[r.maker].sum+=r.prog; makerMap[r.maker].cnt++;
-  });
-  const makers=Object.entries(makerMap).map(([k,v])=>({k,avg:Math.round(v.sum/v.cnt*100)}));
-  if(charts.maker)charts.maker.destroy();
-  charts.maker=new Chart(document.getElementById('cMaker'),{type:'bar',
-    data:{labels:makers.map(m=>m.k),datasets:[{label:'평균 공정률(%)',data:makers.map(m=>m.avg),
-      backgroundColor:'rgba(56,122,221,.6)',borderRadius:4,borderSkipped:false}]},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
-      scales:{x:{grid:{color:GC}},y:{grid:{color:GC},max:100,ticks:{callback:v=>v+'%'}}}}});
 }
 
 /* ══ TAB 3: 원가 ══ */
@@ -2190,6 +2224,38 @@ function showSearchDetail(no){
     </div>
     <div style="font-size:10px;font-weight:800;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">공정 진행 단계</div>
     <div class="process-timeline">${tlHtml}</div>
+    ${(function(){
+      const histList = getDeliveryHistory(r.hull);
+      if(histList.length===0) return '';
+      const rows = histList.map((h,i)=>{
+        const fromD = p2d(h.from), toD = p2d(h.to);
+        const diffDays = (fromD&&toD) ? Math.round((toD-fromD)/864e5) : null;
+        const diffTxt = diffDays!=null ? (diffDays>0?`+${diffDays}일 연기`:`${diffDays}일 단축`) : '';
+        const diffColor = diffDays>0?'#dc2626':diffDays<0?'#16a34a':'#6b7280';
+        return `<tr>
+          <td style="padding:6px 10px;font-size:11px;color:#6b7280">${i+1}차</td>
+          <td style="padding:6px 10px;font-size:12px;font-weight:600">${h.from}</td>
+          <td style="padding:6px 10px;font-size:11px;color:#9ca3af">→</td>
+          <td style="padding:6px 10px;font-size:12px;font-weight:700;color:#2563eb">${h.to}</td>
+          <td style="padding:6px 10px;font-size:11px;font-weight:700;color:${diffColor}">${diffTxt}</td>
+          <td style="padding:6px 10px;font-size:10px;color:#9ca3af">${h.detectedAt}</td>
+        </tr>`;
+      }).join('');
+      return `<div style="margin-top:16px">
+        <div style="font-size:10px;font-weight:800;color:#dc2626;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">⚠ 납기일 변경 이력 (${histList.length}건)</div>
+        <table style="width:100%;border-collapse:collapse;background:#fef2f2;border-radius:8px;overflow:hidden;border:1px solid #fecaca">
+          <thead><tr style="background:#fee2e2">
+            <th style="padding:6px 10px;font-size:10px;font-weight:800;color:#7f1d1d;text-align:left">차수</th>
+            <th style="padding:6px 10px;font-size:10px;font-weight:800;color:#7f1d1d;text-align:left">변경 전</th>
+            <th></th>
+            <th style="padding:6px 10px;font-size:10px;font-weight:800;color:#7f1d1d;text-align:left">변경 후</th>
+            <th style="padding:6px 10px;font-size:10px;font-weight:800;color:#7f1d1d;text-align:left">변동</th>
+            <th style="padding:6px 10px;font-size:10px;font-weight:800;color:#7f1d1d;text-align:left">감지일</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    })()}
     <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
       <button class="search-btn primary" onclick="sw(3);setTimeout(()=>selProj(${r.no}),60)" style="font-size:10px;height:28px;padding:0 12px">원가 상세 보기 →</button>
       <button class="search-btn reset" onclick="document.getElementById('searchDetail').style.display='none';selectedSearchNo=null;runSearch()" style="font-size:10px;height:28px;padding:0 12px">닫기</button>
@@ -2351,6 +2417,89 @@ function renderECSSrcPanel(){
   const total = ECSDB.length;
   const files = ECS_SOURCES.length;
   info.textContent = `총 ${files}개 파일 병합 → ${total}건 (Hull No. 기준, 최신 파일 우선)`;
+}
+
+
+/* ══════════════════════════════════════════════════════
+   납기일 변경 이력 관리
+   저장 구조: DELIVERY_HISTORY = {
+     "S1234": [{from:'2026-06-15', to:'2026-07-10', detectedAt:'2026-06-20', source:'파일명'}, ...],
+     ...
+   }
+══════════════════════════════════════════════════════ */
+const DELIVERY_HIST_KEY = 'scrubber_delivery_history_v1';
+let DELIVERY_HISTORY = {};
+
+function loadDeliveryHistory(){
+  try{
+    const raw = localStorage.getItem(DELIVERY_HIST_KEY);
+    DELIVERY_HISTORY = raw ? JSON.parse(raw) : {};
+  } catch(e){ DELIVERY_HISTORY = {}; }
+}
+
+function saveDeliveryHistoryToDB(){
+  try{ localStorage.setItem(DELIVERY_HIST_KEY, JSON.stringify(DELIVERY_HISTORY)); }
+  catch(e){ console.warn('납기이력 저장 실패:', e.message); }
+}
+
+// 납기 변경 기록 (중복 방지: 같은 from→to 조합이 이미 있으면 스킵)
+function recordDeliveryChange(hull, yard, fromDate, toDate, sourceFile){
+  if(!DELIVERY_HISTORY[hull]) DELIVERY_HISTORY[hull] = [];
+  const list = DELIVERY_HISTORY[hull];
+  const dup = list.find(h => h.from===fromDate && h.to===toDate);
+  if(dup) return; // 이미 기록됨
+  const now = new Date();
+  list.push({
+    from: fromDate,
+    to: toDate,
+    detectedAt: now.toISOString().slice(0,10),
+    source: sourceFile,
+    yard: yard
+  });
+  saveDeliveryHistoryToDB();
+  saveDeliveryHistoryToSheets(hull, yard, fromDate, toDate, sourceFile);
+}
+
+// 특정 호선의 변경 이력 조회 (오래된 순)
+function getDeliveryHistory(hull){
+  return DELIVERY_HISTORY[hull] || [];
+}
+
+// Sheets에 납기 변경 이력 저장
+async function saveDeliveryHistoryToSheets(hull, yard, fromDate, toDate, sourceFile){
+  if(!sheetsEnabled||!APPS_SCRIPT_URL) return;
+  try{
+    await fetch(APPS_SCRIPT_URL, {
+      method:'POST',
+      body: JSON.stringify({
+        action:'saveDeliveryChange',
+        hull, yard, from:fromDate, to:toDate,
+        detectedAt:new Date().toISOString().slice(0,10),
+        source:sourceFile
+      })
+    });
+  } catch(e){ console.warn('납기이력 Sheets 저장 실패:', e.message); }
+}
+
+// Sheets에서 납기 변경 이력 불러오기 (페이지 로드 시)
+async function loadDeliveryHistoryFromSheets(){
+  if(!sheetsEnabled||!APPS_SCRIPT_URL) return;
+  try{
+    const res = await fetch(APPS_SCRIPT_URL+'?action=getDeliveryHistory');
+    const json = await res.json();
+    if(!json.ok) return;
+    const rows = json.data || [];
+    const grouped = {};
+    rows.forEach(r=>{
+      if(!grouped[r.hull]) grouped[r.hull] = [];
+      grouped[r.hull].push({from:r.from, to:r.to, detectedAt:r.detectedAt, source:r.source, yard:r.yard});
+    });
+    // Sheets 데이터와 로컬 데이터 병합 (Sheets 우선)
+    Object.keys(grouped).forEach(hull=>{
+      DELIVERY_HISTORY[hull] = grouped[hull];
+    });
+    saveDeliveryHistoryToDB();
+  } catch(e){ console.warn('납기이력 Sheets 로드 실패:', e.message); }
 }
 
 function clearHistory(){
@@ -2600,14 +2749,26 @@ function mergeScheduleData(filename, newRows){
 }
 
 function rebuildDB(){
-  const merged = new Map();
-  // 오래된 파일 순서대로 넣고, 나중 파일이 덮어씀
+  const merged = new Map(); // hull → row
+  // DB_SOURCES는 업로드 순서대로 쌓여있음 (오래된 파일 → 최신 파일)
+  // 같은 호선이 여러 파일에 있으면 마지막(최신) 파일의 값으로 덮어씀
+  // 이 과정에서 납기일이 바뀌면 변경 이력을 기록
   DB_SOURCES.forEach(src => {
     src.data.forEach(r => {
-      merged.set(r.hull + '|' + r.delivery, r);
+      const prevRow = merged.get(r.hull);
+      if(prevRow && prevRow.delivery && r.delivery && prevRow.delivery !== r.delivery){
+        // 납기일 변경 감지
+        recordDeliveryChange(r.hull, r.yard, prevRow.delivery, r.delivery, src.filename);
+      }
+      merged.set(r.hull, r);
     });
   });
   DB = Array.from(merged.values());
+  // 최초 계획 납기일 부여 (이력에서 가장 오래된 값, 없으면 현재 납기일)
+  DB.forEach(r => {
+    const hist = getDeliveryHistory(r.hull);
+    r._origDelivery = hist.length > 0 ? hist[0].from : r.delivery;
+  });
   // No. 재정렬 (납기일 오름차순)
   DB.sort((a,b) => (a.delivery||'').localeCompare(b.delivery||''));
   DB.forEach((r,i) => r._idx = i+1);
@@ -2744,15 +2905,32 @@ async function loadFromSheets(){
       ECSDB = ecs.map(r=>({
         hull:String(r.hull||''), yard:String(r.yard||''), maker:String(r.maker||''),
         delivery:String(r.delivery||'-'), di:String(r.di||'-'), insp:String(r.insp||'-'),
-        prog:parseFloat(String(r.prog||'0').replace(/[^\d.]/g,''))||0
+        prog:parseFloat(String(r.prog||'0').replace(/[^\d.]/g,''))||0,
+        _week:String(r._week||'')
       })).filter(r=>r.hull);
+
+      // ECS_SOURCES 패널도 _week 기준으로 재구성 (Sheets에는 파일명이 없으므로 주차별로 그룹화)
+      const weekGroups = {};
+      ECSDB.forEach(r=>{
+        const wk = r._week || '미상';
+        if(!weekGroups[wk]) weekGroups[wk] = [];
+        weekGroups[wk].push(r);
+      });
+      ECS_SOURCES = Object.entries(weekGroups).map(([week, rows])=>({
+        filename: `ECS_${week}`,
+        company: week,
+        count: rows.length,
+        data: rows
+      }));
+      renderECSSrcPanel();
     }
-    // 소스 패널 반영
+    // 생산계획 소스 패널 반영
     if(sources && sources.length > 0){
       DB_SOURCES = sources.map(s=>({filename:s.filename,company:s.company,count:parseInt(s.count)||0,data:[]}));
       renderSrcPanel();
     }
     if(hintEl) hintEl.textContent=`Sheets 로드 완료: 생산계획 ${DB.length}건 / ECS ${ECSDB.length}건`;
+    await loadDeliveryHistoryFromSheets();
     selNo=null; init();
   } catch(e){
     if(hintEl) hintEl.textContent='Sheets 로드 실패: '+e.message+' | localStorage 복원 시도';
@@ -2814,6 +2992,7 @@ function init(){
 }
 
 function initWithRestore(){
+  loadDeliveryHistory();
   // Sheets 연동 상태 버튼 업데이트
   updateSheetsBtnState(!!localStorage.getItem(SHEETS_URL_KEY));
   // Sheets 연동되어 있으면 Sheets에서 우선 로드, 아니면 localStorage 복원

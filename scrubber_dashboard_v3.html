@@ -2276,7 +2276,17 @@ function showSearchDetail(no){
 const HIST_KEY = 'scrubber_sox_history_v1';
 
 function loadHistoryAll(){
-  try{ return JSON.parse(localStorage.getItem(HIST_KEY)||'[]'); }
+  try{
+    const arr = JSON.parse(localStorage.getItem(HIST_KEY)||'[]');
+    // 기존 데이터에 sortKey 없으면 자동 보정 + 재정렬 (마이그레이션)
+    let needResort=false;
+    arr.forEach(h=>{ if(!h.sortKey){ h.sortKey=labelToSortKey(h.label); needResort=true; } });
+    if(needResort){
+      arr.sort((a,b)=>b.sortKey.localeCompare(a.sortKey));
+      saveHistoryAll(arr);
+    }
+    return arr;
+  }
   catch(e){ return []; }
 }
 function saveHistoryAll(arr){
@@ -2301,6 +2311,17 @@ function extractWeekLabel(filename){
   return `${now.getFullYear()}년 ${now.getMonth()+1}월 ${Math.ceil(now.getDate()/7)}주차`;
 }
 
+// 라벨("2026년 2월 1주차")에서 정렬 가능한 키 추출 (실제 주차 기준 정렬용)
+function labelToSortKey(label){
+  // 패턴: YYYY년 M월 N주차
+  const m = String(label||'').match(/(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})주차/);
+  if(m){
+    const y=m[1].padStart(4,'0'), mo=m[2].padStart(2,'0'), w=m[3].padStart(2,'0');
+    return `${y}${mo}${w}`;
+  }
+  return '00000000'; // 패턴 불일치 시 최하위로
+}
+
 // 주차 이력 저장 (같은 주차면 덮어씀, 다른 주차면 추가)
 function saveHistoryEntry(label, ecsData){
   const history=loadHistoryAll();
@@ -2308,13 +2329,14 @@ function saveHistoryEntry(label, ecsData){
   const idx=history.findIndex(h=>h.label===label);
   const entry={
     label,
-    date: now,
+    date: now, // 업로드한 실제 날짜 (참고용으로만 보관)
+    sortKey: labelToSortKey(label), // 실제 주차 기준 정렬 키
     data: ecsData.map(r=>({hull:r.hull,yard:r.yard,maker:r.maker,prog:r.prog,delivery:r.delivery}))
   };
   if(idx>=0){ history[idx]=entry; }
   else { history.push(entry); }
-  // 최신순 정렬
-  history.sort((a,b)=>b.date.localeCompare(a.date));
+  // ★ 핵심 수정: 업로드 날짜(date)가 아닌 실제 주차(sortKey) 기준 최신순 정렬
+  history.sort((a,b)=>(b.sortKey||labelToSortKey(b.label)).localeCompare(a.sortKey||labelToSortKey(a.label)));
   saveHistoryAll(history);
   updateHistoryCount();
 }
